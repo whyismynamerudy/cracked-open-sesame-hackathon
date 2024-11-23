@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "quickstart-selenium-python"
+version = "0.1.0"
+description = ""
+authors = ["Anirudh Kamath <anirudh@browserbase.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.8.1,<4.0"
+selenium = ">=4.26.1"
+browserbase = "1"
+python-dotenv = "1.0.0"
+anthropic = "^0.39.0"
+fastapi = "^0.110.0"
+uvicorn = "^0.27.1"
+pydantic = "^2.6.3"
+pydantic-settings = "^2.6.1"
+langchain = "^0.1.12"
+langchain-openai = "^0.0.8"
+langfuse = ">=2.0.0"
+openai = ">=1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
