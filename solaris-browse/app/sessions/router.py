@@ -262,6 +262,7 @@ async def navigate(
         driver.get(navigation.url)
         html_content = driver.page_source
         analysis = analyze_page_with_claude(html_content)
+        # @RUDY add agents here
         
         return {
             "url": driver.current_url,
