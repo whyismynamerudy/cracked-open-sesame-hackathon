@@ -188,9 +188,9 @@ class AutomationOrchestrator:
     async def get_browser_state(self, browser_driver) -> BrowserState:
         """Capture current browser state"""
         # Get basic page info
-        current_url = await browser_driver.current_url
-        page_title = await browser_driver.get_title()
-        page_content = await browser_driver.get_page_source()
+        current_url = browser_driver.current_url()
+        page_title = browser_driver.get_title()
+        page_content = browser_driver.get_page_source()
         
         # Parse page content
         soup = BeautifulSoup(page_content, 'html.parser')

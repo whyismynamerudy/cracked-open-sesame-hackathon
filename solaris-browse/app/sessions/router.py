@@ -10,6 +10,9 @@ import os
 import requests
 from app.agents.agents import AutomationOrchestrator
 from dotenv import load_dotenv
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
 load_dotenv()
 
@@ -118,17 +121,17 @@ class NavigationResponse(BaseModel):
         }
 
 
-class SeleniumBrowserDriver():
+class SeleniumBrowserDriver:
     def __init__(self, selenium_driver):
         self.driver = selenium_driver
     
-    async def current_url(self) -> str:
+    def current_url(self) -> str:
         return self.driver.current_url
     
-    async def get_title(self) -> str:
+    def get_title(self) -> str:
         return self.driver.title
     
-    async def get_page_source(self) -> str:
+    def get_page_source(self) -> str:
         return self.driver.page_source
     
     async def click_element(self, selector: str) -> bool:
@@ -163,10 +166,6 @@ class SeleniumBrowserDriver():
     
     async def wait_for_element(self, selector: str, timeout: int = 10) -> bool:
         try:
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.webdriver.common.by import By
-            
             wait = WebDriverWait(self.driver, timeout)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
             return True
@@ -182,6 +181,23 @@ class SeleniumBrowserDriver():
         except Exception as e:
             print(f"Scroll error: {str(e)}")
             return False
+
+    async def is_element_visible(self, selector: str, timeout: int = 10) -> bool:
+        try:
+            wait = WebDriverWait(self.driver, timeout)
+            wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selector)))
+            return True
+        except Exception as e:
+            print(f"Visibility check error: {str(e)}")
+            return False
+
+    async def get_element_value(self, selector: str) -> str:
+        try:
+            element = self.driver.find_element("css selector", selector)
+            return element.get_attribute("value") or ""
+        except Exception as e:
+            print(f"Get value error: {str(e)}")
+            return ""
 
 class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
@@ -329,12 +345,6 @@ async def navigate(
         )
     
     try:
-        # driver = active_sessions[session_id]
-        # driver.get(navigation.url)
-        # html_content = driver.page_source
-        # analysis = analyze_page_with_claude(html_content)
-        # @RUDY add agents here
-
         # Get Selenium driver and wrap it in our adapter
         selenium_driver = active_sessions[session_id]
         browser_driver = SeleniumBrowserDriver(selenium_driver)
@@ -349,8 +359,8 @@ async def navigate(
         )
         
         return {
-            "url": selenium_driver.current_url,
-            "title": selenium_driver.title,
+            "url": browser_driver.current_url(),
+            "title": browser_driver.get_title(),
             "automation_result": success,
             "actions_taken": [action.dict() for action in orchestrator.action_history]
         }
