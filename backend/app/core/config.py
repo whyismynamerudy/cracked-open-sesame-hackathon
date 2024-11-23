@@ -1,7 +1,9 @@
 # app/core/config.py
-from typing import List
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import List
+
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     # API Settings
@@ -9,7 +11,7 @@ class Settings(BaseSettings):
     
     # Security
     SECRET_KEY: str
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
     
     # External Service API Keys
     BROWSERBASE_API_KEY: str
@@ -17,6 +19,11 @@ class Settings(BaseSettings):
     
     # Optional Database Settings
     DATABASE_URL: str | None = None
+    
+    # Langfuse settings
+    LANGFUSE_PUBLIC_KEY: str
+    LANGFUSE_SECRET_KEY: str
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"  # Optional, defaults to cloud version
     
     class Config:
         env_file = ".env"

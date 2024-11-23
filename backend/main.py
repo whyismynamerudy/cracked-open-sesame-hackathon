@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+from agents.agents import ExecutorAgent, PlannerAgent
 from app.core.config import Settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,14 +43,32 @@ class ExecuteRequest(BaseModel):
     intent: str
     context: str
 
+# Initialize agents
+planner_agent = PlannerAgent()
+executor_agent = ExecutorAgent()
+
 @app.post("/execute")
 async def execute(request: ExecuteRequest):
-    # TODO: Implement the execution logic
-    return {
-        "status": "success",
-        "data": {
-            "url": request.url,
-            "intent": request.intent,
-            "context": request.context
+    try:
+        # Create a plan using the planner agent
+        plan = await planner_agent.create_plan(
+            url=request.url,
+            intent=request.intent,
+            context=request.context
+        )
+        
+        # Execute the plan using the executor agent
+        result = await executor_agent.execute_plan(plan)
+        
+        return {
+            "status": "success",
+            "data": {
+                "plan": plan.dict(),
+                "execution_results": result
+            }
         }
-    }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
