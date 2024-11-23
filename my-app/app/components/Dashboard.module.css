@@ -1,0 +1,15 @@
+.dashboard{
+    margin-left: 3vw;
+    background-color: #4C4A4F;
+    padding: 30vh 30vw;
+    border-radius: 10px;
+    max-height: 1000px;
+
+}
+
+@media (max-width: 600px) {
+    .dashboard {
+        padding: 30vw 25vw;
+    }
+  }
+  
