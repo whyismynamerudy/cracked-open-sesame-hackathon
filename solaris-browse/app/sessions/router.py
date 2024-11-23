@@ -3,10 +3,11 @@ from pydantic import BaseModel, Field
 from selenium import webdriver
 from selenium.webdriver.remote.remote_connection import RemoteConnection
 from browserbase import Browserbase
-from typing import Dict
+from typing import Dict, List
 from anthropic import Anthropic
 from fastapi.responses import JSONResponse
 import os
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -56,6 +57,41 @@ class SessionResponse(BaseModel):
             "example": {
                 "session_id": "sess_abc123",
                 "status": "created"
+            }
+        }
+
+class SessionStatus(BaseModel):
+    session_id: str = Field(..., description="Unique identifier for the browser session")
+    status: str = Field(..., description="Current status of the session")
+    url: str = Field(default="unknown", description="Current URL of the session")
+    title: str = Field(default="unknown", description="Current page title")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session_id": "sess_abc123",
+                "status": "active",
+                "url": "https://example.com",
+                "title": "Example Domain"
+            }
+        }
+
+class SessionListResponse(BaseModel):
+    sessions: List[SessionStatus] = Field(..., description="List of sessions and their status")
+    count: int = Field(..., description="Total number of sessions")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sessions": [
+                    {
+                        "session_id": "sess_abc123",
+                        "status": "active",
+                        "url": "https://example.com",
+                        "title": "Example Domain"
+                    }
+                ],
+                "count": 1
             }
         }
 
@@ -110,6 +146,70 @@ def create_browser_session():
         command_executor=connection, options=webdriver.ChromeOptions()  # type: ignore
     )
     return {"session_id": session.id, "driver": driver}
+
+def get_browserbase_sessions() -> List[Dict]:
+    """
+    Get all sessions from Browserbase API
+    """
+    url = f"https://api.browserbase.com/v1/projects/{BROWSERBASE_PROJECT_ID}/sessions"
+    headers = {"Authorization": f"X-BB-API-Key {BROWSERBASE_API_KEY}"}
+    
+    try:
+        url = "https://www.browserbase.com/v1/sessions"
+
+        headers = {"X-BB-API-Key": BROWSERBASE_API_KEY}
+
+        response = requests.request("GET", url, headers=headers)
+        return response.json()
+    except:
+        return []
+
+def is_session_alive(session_id: str) -> bool:
+    """
+    Check if a session is still alive according to Browserbase API
+    """
+    sessions = get_browserbase_sessions()
+    return any(s.get("id") == session_id and s.get("status") == "active" for s in sessions)
+
+@router.get("/",
+    response_model=SessionListResponse,
+    responses={
+        200: {"description": "Successfully retrieved alive sessions"},
+        500: {"model": ErrorResponse, "description": "Internal server error"}
+    },
+    summary="List alive sessions",
+    description="Returns a list of all active and responsive browser sessions"
+)
+async def getSessionList():
+    try:
+        sessions = get_browserbase_sessions()
+        print(sessions)
+        session_list = []
+        for session in sessions:
+            session_id = session.get("id")
+            if session_id in active_sessions:
+                driver = active_sessions[session_id]
+                session_list.append({
+                    "session_id": session_id,
+                    "status": "active",
+                    "url": driver.current_url,
+                    "title": driver.title
+                })
+            else:
+                session_list.append({
+                    "session_id": session_id,
+                    "status": "inactive"
+                })
+        
+        return {
+            "sessions": session_list,
+            "count": len(session_list)
+        }
+    except Exception as e:
+        return JSONResponse(
+            content={"error": str(e)},
+            status_code=500
+        )
 
 @router.post("/create", 
     response_model=SessionResponse,
