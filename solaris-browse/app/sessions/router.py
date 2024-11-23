@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from contextlib import contextmanager
 
 load_dotenv()
 
@@ -27,14 +29,45 @@ BROWSERBASE_API_KEY = os.getenv("BROWSERBASE_API_KEY")
 BROWSERBASE_PROJECT_ID = os.getenv("BROWSERBASE_PROJECT_ID")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 
-orchestrator = AutomationOrchestrator(CLAUDE_API_KEY)
-
 # Initialize clients
 bb = Browserbase(api_key=BROWSERBASE_API_KEY)
 anthropic = Anthropic(api_key=CLAUDE_API_KEY)
+orchestrator = AutomationOrchestrator(CLAUDE_API_KEY)
 
-# Store active sessions
-active_sessions = {}
+# Store active sessions in a class to handle reloads better
+class SessionManager:
+    def __init__(self):
+        self._sessions: Dict[str, webdriver.Remote] = {}
+    
+    def add_session(self, session_id: str, driver: webdriver.Remote):
+        self._sessions[session_id] = driver
+    
+    def get_session(self, session_id: str) -> webdriver.Remote:
+        return self._sessions.get(session_id)
+    
+    def remove_session(self, session_id: str):
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+    
+    def get_all_sessions(self) -> Dict[str, webdriver.Remote]:
+        return self._sessions.copy()
+    
+    def cleanup(self):
+        for session_id, driver in list(self._sessions.items()):
+            try:
+                driver.quit()
+            except:
+                pass
+            self.remove_session(session_id)
+
+# Create global session manager
+session_manager = SessionManager()
+
+def cleanup_sessions():
+    """
+    Clean up all active sessions
+    """
+    session_manager.cleanup()
 
 class BrowserbaseConnection(RemoteConnection):
     """
@@ -120,10 +153,11 @@ class NavigationResponse(BaseModel):
             }
         }
 
-
 class SeleniumBrowserDriver:
     def __init__(self, selenium_driver):
         self.driver = selenium_driver
+        self.wait = WebDriverWait(self.driver, 10)
+        self.actions = ActionChains(self.driver)
     
     def current_url(self) -> str:
         return self.driver.current_url
@@ -133,11 +167,40 @@ class SeleniumBrowserDriver:
     
     def get_page_source(self) -> str:
         return self.driver.page_source
+
+    def _find_element(self, selector: str):
+        """Find element using multiple strategies"""
+        try:
+            # Try CSS selector first
+            return self.driver.find_element(By.CSS_SELECTOR, selector)
+        except Exception:
+            try:
+                # Try finding by text content using XPath
+                # Use double quotes for XPath string to avoid escaping
+                clean_text = selector.replace('"', "'")
+                xpath = f'//*[contains(text(), "{clean_text}")]'
+                return self.driver.find_element(By.XPATH, xpath)
+            except Exception:
+                try:
+                    # Try partial link text
+                    return self.driver.find_element(By.PARTIAL_LINK_TEXT, selector)
+                except Exception as e:
+                    print(f"Element not found with any strategy: {selector}")
+                    raise e
     
     async def click_element(self, selector: str) -> bool:
         try:
-            element = self.driver.find_element("css selector", selector)
-            element.click()
+            element = self._find_element(selector)
+            # Scroll element into view
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+            # Wait for element to be clickable
+            self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+            # Try regular click first
+            try:
+                element.click()
+            except Exception:
+                # If regular click fails, try JavaScript click
+                self.driver.execute_script("arguments[0].click();", element)
             return True
         except Exception as e:
             print(f"Click error: {str(e)}")
@@ -145,7 +208,7 @@ class SeleniumBrowserDriver:
     
     async def input_text(self, selector: str, value: str) -> bool:
         try:
-            element = self.driver.find_element("css selector", selector)
+            element = self._find_element(selector)
             element.clear()
             element.send_keys(value)
             return True
@@ -155,9 +218,9 @@ class SeleniumBrowserDriver:
     
     async def select_option(self, selector: str, value: str) -> bool:
         try:
-            element = self.driver.find_element("css selector", selector)
+            element = self._find_element(selector)
             element.click()
-            option = self.driver.find_element("css selector", f"{selector} option[value='{value}']")
+            option = self.driver.find_element(By.CSS_SELECTOR, f'{selector} option[value="{value}"]')
             option.click()
             return True
         except Exception as e:
@@ -166,16 +229,26 @@ class SeleniumBrowserDriver:
     
     async def wait_for_element(self, selector: str, timeout: int = 10) -> bool:
         try:
-            wait = WebDriverWait(self.driver, timeout)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-            return True
+            def find_with_multiple_strategies(driver):
+                try:
+                    return driver.find_element(By.CSS_SELECTOR, selector)
+                except Exception:
+                    try:
+                        clean_text = selector.replace('"', "'")
+                        xpath = f'//*[contains(text(), "{clean_text}")]'
+                        return driver.find_element(By.XPATH, xpath)
+                    except Exception:
+                        return driver.find_element(By.PARTIAL_LINK_TEXT, selector)
+            
+            element = WebDriverWait(self.driver, timeout).until(find_with_multiple_strategies)
+            return element is not None
         except Exception as e:
             print(f"Wait error: {str(e)}")
             return False
     
     async def scroll_to_element(self, selector: str) -> bool:
         try:
-            element = self.driver.find_element("css selector", selector)
+            element = self._find_element(selector)
             self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
             return True
         except Exception as e:
@@ -184,16 +257,28 @@ class SeleniumBrowserDriver:
 
     async def is_element_visible(self, selector: str, timeout: int = 10) -> bool:
         try:
-            wait = WebDriverWait(self.driver, timeout)
-            wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selector)))
-            return True
+            def check_visibility_with_multiple_strategies(driver):
+                try:
+                    element = driver.find_element(By.CSS_SELECTOR, selector)
+                    return element.is_displayed()
+                except Exception:
+                    try:
+                        clean_text = selector.replace('"', "'")
+                        xpath = f'//*[contains(text(), "{clean_text}")]'
+                        element = driver.find_element(By.XPATH, xpath)
+                        return element.is_displayed()
+                    except Exception:
+                        element = driver.find_element(By.PARTIAL_LINK_TEXT, selector)
+                        return element.is_displayed()
+            
+            return WebDriverWait(self.driver, timeout).until(check_visibility_with_multiple_strategies)
         except Exception as e:
             print(f"Visibility check error: {str(e)}")
             return False
 
     async def get_element_value(self, selector: str) -> str:
         try:
-            element = self.driver.find_element("css selector", selector)
+            element = self._find_element(selector)
             return element.get_attribute("value") or ""
         except Exception as e:
             print(f"Get value error: {str(e)}")
@@ -229,8 +314,11 @@ def create_browser_session():
     """
     session = bb.sessions.create(project_id=BROWSERBASE_PROJECT_ID)
     connection = BrowserbaseConnection(session.id, session.selenium_remote_url)
+    options = webdriver.ChromeOptions()
+    options.add_argument('--start-maximized')
+    options.add_argument('--disable-popup-blocking')
     driver = webdriver.Remote(
-        command_executor=connection, options=webdriver.ChromeOptions()  # type: ignore
+        command_executor=connection, options=options  # type: ignore
     )
     return {"session_id": session.id, "driver": driver}
 
@@ -243,12 +331,10 @@ def get_browserbase_sessions() -> List[Dict]:
     
     try:
         url = "https://www.browserbase.com/v1/sessions"
-
         headers = {"X-BB-API-Key": BROWSERBASE_API_KEY}
-
         response = requests.request("GET", url, headers=headers)
         return response.json()
-    except:
+    except Exception:
         return []
 
 def is_session_alive(session_id: str) -> bool:
@@ -272,6 +358,7 @@ async def getSessionList():
         sessions = get_browserbase_sessions()
         print(sessions)
         session_list = []
+        active_sessions = session_manager.get_all_sessions()
         for session in sessions:
             session_id = session.get("id")
             if session_id in active_sessions:
@@ -312,7 +399,7 @@ async def create_session(background_tasks: BackgroundTasks):
     try:
         session_data = create_browser_session()
         session_id = session_data["session_id"]
-        active_sessions[session_id] = session_data["driver"]
+        session_manager.add_session(session_id, session_data["driver"])
         
         return JSONResponse(
             content={"session_id": session_id, "status": "created"},
@@ -338,19 +425,24 @@ async def navigate(
     navigation: NavigationRequest,
     session_id: str = Path(..., description="ID of the browser session")
 ):
-    if session_id not in active_sessions:
+    driver = session_manager.get_session(session_id)
+    if not driver:
         return JSONResponse(
             content={"error": "Session not found"},
             status_code=404
         )
     
     try:
-        # Get Selenium driver and wrap it in our adapter
-        selenium_driver = active_sessions[session_id]
-        browser_driver = SeleniumBrowserDriver(selenium_driver)
+        # Wrap Selenium driver in our adapter
+        browser_driver = SeleniumBrowserDriver(driver)
         
         # Navigate to URL
-        selenium_driver.get(navigation.url)
+        driver.get(navigation.url)
+        
+        # Wait for page load
+        WebDriverWait(driver, 10).until(
+            lambda driver: driver.execute_script('return document.readyState') == 'complete'
+        )
         
         # Execute automation with the orchestrator
         success = await orchestrator.execute_intent(
@@ -382,16 +474,16 @@ async def navigate(
 async def close_session(
     session_id: str = Path(..., description="ID of the browser session to close")
 ):
-    if session_id not in active_sessions:
+    driver = session_manager.get_session(session_id)
+    if not driver:
         return JSONResponse(
             content={"error": "Session not found"},
             status_code=404
         )
     
     try:
-        driver = active_sessions[session_id]
         driver.quit()
-        del active_sessions[session_id]
+        session_manager.remove_session(session_id)
         return {"status": "closed"}
     except Exception as e:
         return JSONResponse(
@@ -411,31 +503,20 @@ async def close_session(
 async def kill_browser(
     session_id: str = Path(..., description="ID of the browser session to kill")
 ):
-    if session_id not in active_sessions:
+    driver = session_manager.get_session(session_id)
+    if not driver:
         return JSONResponse(
             content={"error": "Session not found"},
             status_code=404
         )
     
     try:
-        driver = active_sessions[session_id]
         # Force kill the browser process
         driver.service.process.kill()
-        del active_sessions[session_id]
+        session_manager.remove_session(session_id)
         return {"status": "killed"}
     except Exception as e:
         return JSONResponse(
             content={"error": str(e)},
             status_code=500
         )
-
-def cleanup_sessions():
-    """
-    Clean up all active sessions
-    """
-    for session_id, driver in active_sessions.items():
-        try:
-            driver.quit()
-        except:
-            pass
-    active_sessions.clear()

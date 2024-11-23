@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.sessions.router import router as sessions_router
+from app.sessions.router import router as sessions_router, cleanup_sessions
 from app.core.config import Settings
-from app.sessions import cleanup_sessions
 
 description = """
 ```
@@ -25,34 +24,39 @@ An API for managing browser automation sessions with multiple approaches:
 
 settings = Settings()
 
-app = FastAPI(
-    title="Solaris Browse",
-    description=description,
-    version="1.0.0"
-)
+def create_app():
+    app = FastAPI(
+        title="Solaris Browse",
+        description=description,
+        version="1.0.0"
+    )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# Include routers
-app.include_router(sessions_router)
+    # Include routers
+    app.include_router(sessions_router)
 
-# Root endpoint for health check
-@app.get("/")
-async def root():
-    return {"status": "healthy", "version": "1.0.0"}
+    # Root endpoint for health check
+    @app.get("/")
+    async def root():
+        return {"status": "healthy", "version": "1.0.0"}
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """
-    Clean up all active sessions when shutting down
-    """
-    cleanup_sessions()
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """
+        Clean up all active sessions when shutting down
+        """
+        cleanup_sessions()
+
+    return app
+
+app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
@@ -61,5 +65,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        reload_dirs=["app"]
+        reload_dirs=["app"],
+        workers=1  # Use single worker to avoid multiprocessing issues
     )

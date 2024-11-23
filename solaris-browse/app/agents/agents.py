@@ -57,6 +57,14 @@ Available action types:
 - wait: Wait for an element to appear
 - scroll: Scroll to an element
 
+IMPORTANT: When generating selectors, you MUST use proper CSS selectors. For example:
+- To select by ID: '#elementId'
+- To select by class: '.className'
+- To select by attribute: '[data-testid="example"]'
+- To select by text content: 'a:contains("Link Text")'
+- To select nested elements: '.parent .child'
+DO NOT use text-based selectors like 'a[text="example"]'.
+
 {self._format_state_for_prompt(state)}
 
 {history_str}
@@ -65,13 +73,13 @@ User's Intent: {intent}
 
 Generate a single next action in JSON format with these fields:
 - action_type: The type of action to take
-- selector: The specific CSS selector or XPath to target
+- selector: The specific CSS selector (following the rules above)
 - value: Any value to input (for type actions)
 - description: A clear description of what this action does
 
 Think through this step-by-step:
 1. What is the immediate next action needed to progress toward the intent?
-2. What is the most reliable way to identify the target element?
+2. What is the most reliable way to identify the target element using CSS selectors?
 3. What should happen after this action succeeds?
 
 Respond ONLY with the JSON object for the next action."""
@@ -113,6 +121,11 @@ class ExecutorAgent:
             if not func:
                 raise ValueError(f"Unknown action type: {action.action_type}")
             
+            # First wait for the element to be present
+            if not await browser_driver.wait_for_element(action.selector):
+                print(f"Element not found: {action.selector}")
+                return False
+            
             # Execute the action
             success = await func(browser_driver, action)
             
@@ -125,15 +138,16 @@ class ExecutorAgent:
             print(f"Error executing action: {str(e)}")
             return False
 
-    def _validate_action(self, browser_driver, action: BrowserAction) -> bool:
+    async def _validate_action(self, browser_driver, action: BrowserAction) -> bool:
         """Validate that an action was successful"""
         prompt = f"""Given this browser action:
 {json.dumps(action.dict(), indent=2)}
 
 Generate a SINGLE validation check to verify the action succeeded.
+The validation must use proper CSS selectors.
 Respond only with a JSON object containing:
 - validation_type: "visibility" | "value" | "state_change"
-- selector: The element to check
+- selector: The CSS selector to check
 - expected_value: The expected value or state (if applicable)"""
 
         response = self.client.messages.create(
@@ -147,7 +161,19 @@ Respond only with a JSON object containing:
 
         try:
             validation = json.loads(response.content[0].text)
-            return True  # For now, assume validation passed
+            
+            # Perform the validation check
+            if validation["validation_type"] == "visibility":
+                return await browser_driver.is_element_visible(validation["selector"])
+            elif validation["validation_type"] == "value":
+                actual_value = await browser_driver.get_element_value(validation["selector"])
+                return actual_value == validation["expected_value"]
+            elif validation["validation_type"] == "state_change":
+                # Wait a moment for state to change
+                await asyncio.sleep(1)
+                return await browser_driver.is_element_visible(validation["selector"])
+            
+            return False
         except Exception as e:
             print(f"Validation error: {str(e)}")
             return False
@@ -191,7 +217,7 @@ class AutomationOrchestrator:
                 "tag": elem.name,
                 "id": elem.get('id', ''),
                 "text": elem.get_text(strip=True),
-                "selector": f"#{elem.get('id')}" if elem.get('id') else f".{' .'.join(elem.get('class', []))}"
+                "selector": self._generate_selector(elem)
             })
         
         # Get form fields
@@ -201,7 +227,8 @@ class AutomationOrchestrator:
                 "type": elem.get('type', 'text'),
                 "id": elem.get('id', ''),
                 "name": elem.get('name', ''),
-                "placeholder": elem.get('placeholder', '')
+                "placeholder": elem.get('placeholder', ''),
+                "selector": self._generate_selector(elem)
             })
         
         # Get visible text
@@ -217,6 +244,21 @@ class AutomationOrchestrator:
             visible_text_content=visible_text,
             form_fields=form_fields
         )
+    
+    def _generate_selector(self, elem) -> str:
+        """Generate a reliable CSS selector for an element"""
+        if elem.get('id'):
+            return f"#{elem.get('id')}"
+        elif elem.get('name'):
+            return f"[name='{elem.get('name')}']"
+        elif elem.get('class'):
+            return f".{' .'.join(elem.get('class'))}"
+        else:
+            # Create a selector based on tag and text content
+            text = elem.get_text(strip=True)
+            if text:
+                return f"{elem.name}:contains('{text}')"
+            return elem.name
     
     async def execute_intent(self, browser_driver, intent: str, max_steps: int = 10) -> bool:
         """Execute user intent through planning and execution loop"""
@@ -244,17 +286,17 @@ class AutomationOrchestrator:
             if success:
                 self.action_history.append(next_action)
                 steps_taken += 1
+                
+                # Check if intent is satisfied
+                if await self._check_intent_satisfied(browser_driver, intent, current_state):
+                    return True
             else:
                 print(f"Failed to execute action: {next_action}")
                 return False
-            
-            # Check if intent is satisfied
-            if self._check_intent_satisfied(browser_driver, intent, current_state):
-                return True
                 
         return False
     
-    def _check_intent_satisfied(self, browser_driver, intent: str, state: BrowserState) -> bool:
+    async def _check_intent_satisfied(self, browser_driver, intent: str, state: BrowserState) -> bool:
         """Check if the user's intent has been satisfied"""
         prompt = f"""Given the user's intent and current page state, determine if the intent has been satisfied.
 
