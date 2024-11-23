@@ -13,20 +13,21 @@ interface Step {
 }
 
 interface BrowserViewProps {
+  sessionId: string;
   debuggingUrl?: string;
 }
 
 
-export default function BrowserView({ debuggingUrl }: BrowserViewProps) {
+export default function BrowserView({ sessionId, debuggingUrl }: BrowserViewProps) {
   const [steps, setSteps] = useState<Step[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchSessions = async () => {
       try {
-        const response = await fetch('http://localhost:8000/session/');
+        const response = await fetch(`http://localhost:8000/sessions/${sessionId}`);
         const data = await response.json();
-        setSessions(data.sessions);
+        setSteps(data.steps);
       } catch (error) {
         console.error('Error fetching sessions:', error);
       } finally {
