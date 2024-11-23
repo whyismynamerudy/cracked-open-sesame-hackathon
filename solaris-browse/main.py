@@ -1,24 +1,37 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import Settings
-from app.sessions.router import router as sessions_router, cleanup_sessions
 from app.agents.router import router as agents_router
+from app.sessions.router import router as sessions_router
+from app.core.config import Settings
+from app.sessions import cleanup_sessions
 
-settings = Settings()
+description = """
+```
+_______.  ______    __          ___      .______       __       _______.
+/       | /  __  \  |  |        /   \     |   _  \     |  |     /       |
+|   (----`|  |  |  | |  |       /  ^  \    |  |_)  |    |  |    |   (----`
+\   \    |  |  |  | |  |      /  /_\  \   |      /     |  |     \   \    
+.----)   |   |  `--'  | |  `----./  _____  \  |  |\  \----.|  | .----)   |   
+|_______/     \______/  |_______/__/     \__\ | _| `._____||__| |_______/    
+```
 
-app = FastAPI(
-    title="Solaris Browse API",
-    description="""
-    An API for managing browser automation sessions with multiple approaches:
+Solaris Browse API
+
+An API for managing browser automation sessions with multiple approaches:
     1. Direct browser control with Browserbase and Claude analysis
     2. AI agent-based automation with LangChain for complex tasks
     
     Supports parallel browser sessions, navigation, and AI-powered page analysis.
-    """,
+"""
+
+settings = Settings()
+
+app = FastAPI(
+    title="Solaris Browse",
+    description=description,
     version="1.0.0"
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,

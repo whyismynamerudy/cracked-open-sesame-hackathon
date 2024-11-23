@@ -1,9 +1,9 @@
 [tool.poetry]
-name = "quickstart-selenium-python"
+name = "solaris-browse"
 version = "0.1.0"
 description = ""
-authors = ["Anirudh Kamath <anirudh@browserbase.com>"]
-readme = "README.md"
+authors = ["Your Name <you@example.com>"]
+packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0"
@@ -19,6 +19,11 @@ langchain = "^0.1.12"
 langchain-openai = "^0.0.8"
 langfuse = ">=2.0.0"
 openai = ">=1.0.0"
+psycopg2-binary = "^2.9.9"
+sqlalchemy = "^2.0.0"
+
+[tool.poetry.scripts]
+migrate = "app.db.migrate:run_migration"
 
 [build-system]
 requires = ["poetry-core"]
