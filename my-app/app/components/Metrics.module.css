@@ -1,0 +1,38 @@
+.metricsContainer {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    padding: 16px;
+  }
+  
+  .metricCard {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    border-radius: 12px;
+    background-color: #B988FF;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  
+  .metricCard:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+  }
+  
+  .metricTitle {
+    font-size: 1rem;
+    font-weight: 600;
+    color: black;
+    margin: 0 0 8px;
+  }
+  
+  .metricValue {
+    font-size: 1rem;
+    font-weight: 700;
+    color: white;
+    margin: 0;
+  }
+  

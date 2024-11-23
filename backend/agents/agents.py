@@ -114,7 +114,6 @@ class ExecutorAgent:
             callbacks=[langfuse_callback]
         )
         
-        # Define available tools for web automation
         self.tools = [
             Tool(
                 name="navigate",

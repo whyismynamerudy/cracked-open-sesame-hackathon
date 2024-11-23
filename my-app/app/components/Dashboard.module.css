@@ -1,0 +1,28 @@
+.dashboard{
+    margin-left: 3vw;
+    background-color: #4C4A4F;
+    padding: 30vh 25vw;
+    border-radius: 10px;
+    max-height: 1000px;
+}
+
+.submit {
+    padding: 8px 12px;
+    margin-top: 12px;
+    background-color: #ba88ff;
+    color: white;
+    font-size: 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    position: absolute;
+    top: 10px; 
+    left: 35vw; 
+  }
+@media (max-width: 600px) {
+    .dashboard {
+        padding: 30vw 25vw;
+    }
+  }
+  
