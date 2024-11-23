@@ -266,6 +266,7 @@ class AutomationOrchestrator:
         self.action_history = []
         
         while steps_taken < max_steps:
+            print(f"Step {steps_taken + 1}")
             # Get current state
             current_state = await self.get_browser_state(browser_driver)
             
@@ -276,6 +277,7 @@ class AutomationOrchestrator:
                     intent,
                     self.action_history
                 )
+                print(f"Next Action: {next_action}")
             except Exception as e:
                 print(f"Planning error: {str(e)}")
                 return False
@@ -284,6 +286,7 @@ class AutomationOrchestrator:
             success = await self.executor.execute_action(next_action, browser_driver)
             
             if success:
+                print(f"Action successful: {next_action}")
                 self.action_history.append(next_action)
                 steps_taken += 1
                 

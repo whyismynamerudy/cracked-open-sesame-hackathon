@@ -135,8 +135,8 @@ class SessionListResponse(BaseModel):
         }
 
 class NavigationRequest(BaseModel):
-    url: str = Field(..., description="URL to navigate to", example="https://example.com")
-    intent: str = Field(default="TBA", description="User's automation intent")
+    url: str = Field(..., description="URL to navigate to", example="https://www.ontario.ca/page/government-ontario")
+    intent: str = Field(default="Find info on OSAP", description="User's automation intent")
 
 class NavigationResponse(BaseModel):
     url: str = Field(..., description="Current URL after navigation")
@@ -227,7 +227,7 @@ class SeleniumBrowserDriver:
             print(f"Select error: {str(e)}")
             return False
     
-    async def wait_for_element(self, selector: str, timeout: int = 10) -> bool:
+    async def wait_for_element(self, selector: str, timeout: int = 60) -> bool:
         try:
             def find_with_multiple_strategies(driver):
                 try:
@@ -435,20 +435,26 @@ async def navigate(
     try:
         # Wrap Selenium driver in our adapter
         browser_driver = SeleniumBrowserDriver(driver)
-        
+        print(browser_driver.current_url())
         # Navigate to URL
         driver.get(navigation.url)
+        print(driver.current_url)
         
         # Wait for page load
+        print("waiting for page load")
         WebDriverWait(driver, 10).until(
             lambda driver: driver.execute_script('return document.readyState') == 'complete'
         )
+        print("page loaded")
+        
         
         # Execute automation with the orchestrator
         success = await orchestrator.execute_intent(
             browser_driver,
             navigation.intent
         )
+        print(success)
+        print("automation done")
         
         return {
             "url": browser_driver.current_url(),
