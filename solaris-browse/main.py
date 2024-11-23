@@ -1,7 +1,8 @@
+from app.core.config import Settings
+from app.sessions.router import cleanup_sessions
+from app.sessions.router import router as sessions_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.sessions.router import router as sessions_router, cleanup_sessions
-from app.core.config import Settings
 
 description = """
 ```
@@ -46,15 +47,33 @@ def create_app():
     @app.get("/")
     async def root():
         return {"status": "healthy", "version": "1.0.0"}
+# Add new endpoint
+@app.post("/execute")
+async def execute():
+    """
+    Execute a browser automation task and return the session ID
+    """
+    # You'll need to implement the logic to create/get a session
+    session_id = "your-session-id-logic-here"  # Replace with actual session creation
+    # Call the agents/execute endpoint
+    response = await app.url_for("/agents/execute")(
+        request=ExecuteRequest(
+            url=request.body.url,
+            intent=request.body.intent,
+            context=request.body.context
+        )
+    )
+    # Extract session ID and debugging URL from response
+    session_id = response["data"]["execution_results"]["session_id"]
+    debugging_url = response["data"]["execution_results"]["debugger_url"]
+    status = response["data"]["status"]
+    
+    return {
+        "sessionId": session_id,
+        "debuggingUrl": debugging_url,
+        "status": status
+    }
 
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        """
-        Clean up all active sessions when shutting down
-        """
-        cleanup_sessions()
-
-    return app
 
 app = create_app()
 

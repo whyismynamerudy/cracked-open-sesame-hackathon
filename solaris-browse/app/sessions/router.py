@@ -1,20 +1,21 @@
-from fastapi import APIRouter, BackgroundTasks, status, Path
+import os
+from contextlib import contextmanager
+from typing import Dict, List
+
+import requests
+from anthropic import Anthropic
+from app.agents.agents import AutomationOrchestrator
+from browserbase import Browserbase
+from dotenv import load_dotenv
+from fastapi import APIRouter, BackgroundTasks, Path, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from selenium import webdriver
-from selenium.webdriver.remote.remote_connection import RemoteConnection
-from browserbase import Browserbase
-from typing import Dict, List
-from anthropic import Anthropic
-from fastapi.responses import JSONResponse
-import os
-import requests
-from app.agents.agents import AutomationOrchestrator
-from dotenv import load_dotenv
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from contextlib import contextmanager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.remote_connection import RemoteConnection
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 load_dotenv()
 
@@ -320,7 +321,8 @@ def create_browser_session():
     driver = webdriver.Remote(
         command_executor=connection, options=options  # type: ignore
     )
-    return {"session_id": session.id, "driver": driver}
+    debugger_url = session.debugger_full_screen_url
+    return {"session_id": session.id, "driver": driver, "debugger_url": debugger_url}
 
 def get_browserbase_sessions() -> List[Dict]:
     """
@@ -402,7 +404,7 @@ async def create_session(background_tasks: BackgroundTasks):
         session_manager.add_session(session_id, session_data["driver"])
         
         return JSONResponse(
-            content={"session_id": session_id, "status": "created"},
+            content={"session_id": session_id, "status": "created", "debugger_url": debugger_url},
             status_code=201
         )
     except Exception as e:
