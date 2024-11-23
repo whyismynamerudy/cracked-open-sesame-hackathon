@@ -1,205 +1,322 @@
-from typing import Dict, List
+# app/services/agents.py
+from anthropic import Anthropic
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict
+from bs4 import BeautifulSoup
+import json
+import asyncio
 
-from app.core.config import get_settings
-from langchain.agents import AgentExecutor, create_structured_chat_agent
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool
-from langchain_core.messages import SystemMessage
-from langchain_openai import ChatOpenAI
-from langfuse import Langfuse
-from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
-from pydantic import BaseModel
+class BrowserAction(BaseModel):
+    """Represents a single browser action to be executed"""
+    action_type: str = Field(..., description="Type of action: click, type, select, scroll, wait")
+    selector: str = Field(..., description="CSS selector or XPath for the element")
+    value: Optional[str] = Field(None, description="Value to input if action requires it")
+    description: str = Field(..., description="Human readable description of what this action does")
 
-settings = get_settings()
-
-# Initialize Langfuse
-langfuse = Langfuse(
-    public_key=settings.LANGFUSE_PUBLIC_KEY,
-    secret_key=settings.LANGFUSE_SECRET_KEY,
-    host=settings.LANGFUSE_HOST
-)
-
-# Create callback handler for LangChain
-langfuse_callback = LangfuseCallbackHandler(
-    public_key=settings.LANGFUSE_PUBLIC_KEY,
-    secret_key=settings.LANGFUSE_SECRET_KEY,
-    host=settings.LANGFUSE_HOST
-)
-
-class ActionStep(BaseModel):
-    action: str
-    args: Dict
-
-class Plan(BaseModel):
-    steps: List[ActionStep]
-    reasoning: str
+class BrowserState(BaseModel):
+    """Represents the current state of the browser"""
+    current_url: str
+    page_title: str
+    page_text: str
+    interactive_elements: List[Dict[str, str]]  # List of clickable/interactive elements
+    visible_text_content: str
+    form_fields: List[Dict[str, str]]  # List of input fields and their types
 
 class PlannerAgent:
-    def __init__(self, model_name: str = "gpt-4"):
-        # Initialize LLM with Langfuse tracing
-        self.llm = ChatOpenAI(
-            model_name=model_name, 
+    def __init__(self, anthropic_api_key: str):
+        self.client = Anthropic(api_key=anthropic_api_key)
+        
+    def _format_state_for_prompt(self, state: BrowserState) -> str:
+        """Format browser state into a clear string for the prompt"""
+        return f"""Current Page State:
+- URL: {state.current_url}
+- Title: {state.page_title}
+- Available Interactive Elements:
+{json.dumps(state.interactive_elements, indent=2)}
+- Available Form Fields:
+{json.dumps(state.form_fields, indent=2)}
+- Visible Text Content:
+{state.visible_text_content[:500]}  # First 500 chars for context
+"""
+
+    def get_next_action(self, state: BrowserState, intent: str, history: List[BrowserAction] = None) -> BrowserAction:
+        """Generate the next single action based on current state and intent"""
+        history_str = ""
+        if history:
+            history_str = "Previous actions taken:\n" + "\n".join(
+                f"- {action.action_type} on {action.selector}" for action in history
+            )
+
+        prompt = f"""You are a web automation expert. Given the current state of a webpage and a user's intent, 
+determine the SINGLE NEXT action to take. Generate specific, executable browser actions.
+
+Available action types:
+- click: Click on an element
+- type: Input text into a field
+- select: Choose an option from a dropdown
+- wait: Wait for an element to appear
+- scroll: Scroll to an element
+
+IMPORTANT: When generating selectors, you MUST use proper CSS selectors. For example:
+- To select by ID: '#elementId'
+- To select by class: '.className'
+- To select by attribute: '[data-testid="example"]'
+- To select by text content: 'a:contains("Link Text")'
+- To select nested elements: '.parent .child'
+DO NOT use text-based selectors like 'a[text="example"]'.
+
+{self._format_state_for_prompt(state)}
+
+{history_str}
+
+User's Intent: {intent}
+
+Generate a single next action in JSON format with these fields:
+- action_type: The type of action to take
+- selector: The specific CSS selector (following the rules above)
+- value: Any value to input (for type actions)
+- description: A clear description of what this action does
+
+Think through this step-by-step:
+1. What is the immediate next action needed to progress toward the intent?
+2. What is the most reliable way to identify the target element using CSS selectors?
+3. What should happen after this action succeeds?
+
+Respond ONLY with the JSON object for the next action."""
+
+        response = self.client.messages.create(
+            model="claude-3-opus-20240229",
+            max_tokens=1000,
             temperature=0,
-            callbacks=[langfuse_callback]
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
         )
         
-        # Define the planner prompt with required variables
-        self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="""You are a planning agent that breaks down user intents into specific actionable steps.
-            Given a URL and a user intent, create a detailed plan of browser automation steps.
-            Your plan should be specific and actionable, focusing on web interactions."""),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("user", "{input}"),
-            ("user", "These are the tools you can use: {tool_names}\n\nTool details:\n{tools}"),
-            ("assistant", "I'll help you with that. Let me use my tools.\n{agent_scratchpad}")
-        ])
-
-        # Create the planner agent
-        self.agent = create_structured_chat_agent(
-            llm=self.llm,
-            prompt=self.prompt,
-            tools=[]  # Planner doesn't need tools as it just creates plans
-        )
-        
-        self.agent_executor = AgentExecutor(
-            agent=self.agent,
-            tools=[],
-            verbose=True,
-            callbacks=[langfuse_callback],
-        )
-
-    async def create_plan(self, url: str, intent: str, context: str) -> Plan:
-        # Create a new trace for this planning session
-        with langfuse.trace(
-            name="create_plan",
-            metadata={
-                "url": url,
-                "intent": intent,
-            }
-        ) as trace:
-            input_text = f"URL: {url}\nIntent: {intent}\nContext: {context}\n\nCreate a detailed plan for achieving this intent."
-            
-            # Log the input
-            trace.log(
-                name="plan_input",
-                level="INFO",
-                metadata={
-                    "url": url,
-                    "intent": intent,
-                    "context": context
-                }
-            )
-            
-            result = await self.agent_executor.ainvoke({"input": input_text})
-            
-            # Log the output plan
-            trace.log(
-                name="plan_output",
-                level="INFO",
-                metadata={"raw_result": result}
-            )
-            
-            # Parse the result into a structured plan
-            plan = Plan(
-                steps=[
-                    ActionStep(action=step["action"], args=step["args"])
-                    for step in result["steps"]
-                ],
-                reasoning=result["reasoning"]
-            )
-            
-            return plan
+        try:
+            action_dict = json.loads(response.content[0].text)
+            return BrowserAction(**action_dict)
+        except Exception as e:
+            print(f"Error parsing Claude's response: {e}")
+            print(f"Raw response: {response.content[0].text}")
+            raise
 
 class ExecutorAgent:
-    def __init__(self, model_name: str = "gpt-3.5-turbo"):
-        self.llm = ChatOpenAI(
-            model_name=model_name, 
-            temperature=0,
-            callbacks=[langfuse_callback]
-        )
+    def __init__(self, anthropic_api_key: str):
+        self.client = Anthropic(api_key=anthropic_api_key)
         
-        # Define available tools for web automation
-        self.tools = [
-            Tool(
-                name="navigate",
-                func=self._navigate,
-                description="Navigate to a specific URL"
-            ),
-            Tool(
-                name="click",
-                func=self._click,
-                description="Click on an element matching the selector"
-            ),
-            Tool(
-                name="type",
-                func=self._type,
-                description="Type text into an input field"
-            ),
-        ]
-
-        # Define the executor prompt with required variables
-        self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="""You are an execution agent that performs web automation tasks.
-            You have access to tools for navigating, clicking, and typing.
-            Execute each step in the plan precisely and report the results."""),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("user", "{input}"),
-            ("user", "These are the tools you can use: {tool_names}\n\nTool details:\n{tools}"),
-            ("assistant", "I'll help you with that. Let me use my tools.\n{agent_scratchpad}")
-        ])
-
-        self.agent = create_structured_chat_agent(
-            llm=self.llm,
-            prompt=self.prompt,
-            tools=self.tools
-        )
-        
-        self.agent_executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            verbose=True,
-            callbacks=[langfuse_callback],
-        )
-
-    async def execute_plan(self, plan: Plan) -> Dict:
-        with langfuse.trace(
-            name="execute_plan",
-            metadata={"plan": plan.dict()}
-        ) as trace:
-            results = []
-            for step in plan.steps:
-                # Create a span for each step execution
-                with trace.span(
-                    name=f"execute_step_{step.action}",
-                    metadata={"step": step.dict()}
-                ) as span:
-                    result = await self.agent_executor.ainvoke({
-                        "input": f"Execute step: {step.action} with arguments: {step.args}"
-                    })
-                    results.append(result)
-                    span.log(
-                        name="step_result",
-                        level="INFO",
-                        metadata={"result": result}
-                    )
+        # Available browser interaction functions
+        self.browser_functions = {
+            "click": self._click_element,
+            "type": self._type_text,
+            "select": self._select_option,
+            "wait": self._wait_for_element,
+            "scroll": self._scroll_to_element
+        }
+    
+    async def execute_action(self, action: BrowserAction, browser_driver) -> bool:
+        """Execute a browser action and return success status"""
+        try:
+            func = self.browser_functions.get(action.action_type)
+            if not func:
+                raise ValueError(f"Unknown action type: {action.action_type}")
             
-            return {"status": "success", "results": results}
+            # First wait for the element to be present
+            if not await browser_driver.wait_for_element(action.selector):
+                print(f"Element not found: {action.selector}")
+                return False
+            
+            # Execute the action
+            success = await func(browser_driver, action)
+            
+            # Validate the action
+            if success:
+                success = await self._validate_action(browser_driver, action)
+            
+            return success
+        except Exception as e:
+            print(f"Error executing action: {str(e)}")
+            return False
 
-    # Tool implementation methods
-    async def _navigate(self, url: str):
-        with langfuse.trace(name="navigate", metadata={"url": url}):
-            # Implement navigation logic
-            return f"Navigated to {url}"
+    async def _validate_action(self, browser_driver, action: BrowserAction) -> bool:
+        """Validate that an action was successful"""
+        prompt = f"""Given this browser action:
+{json.dumps(action.dict(), indent=2)}
 
-    async def _click(self, selector: str):
-        with langfuse.trace(name="click", metadata={"selector": selector}):
-            # Implement click logic
-            return f"Clicked element matching {selector}"
+Generate a SINGLE validation check to verify the action succeeded.
+The validation must use proper CSS selectors.
+Respond only with a JSON object containing:
+- validation_type: "visibility" | "value" | "state_change"
+- selector: The CSS selector to check
+- expected_value: The expected value or state (if applicable)"""
 
-    async def _type(self, selector: str, text: str):
-        with langfuse.trace(
-            name="type",
-            metadata={"selector": selector, "text": text}
-        ):
-            # Implement typing logic
-            return f"Typed '{text}' into element matching {selector}"
+        response = self.client.messages.create(
+            model="claude-3-opus-20240229",
+            max_tokens=500,
+            temperature=0,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        try:
+            validation = json.loads(response.content[0].text)
+            
+            # Perform the validation check
+            if validation["validation_type"] == "visibility":
+                return await browser_driver.is_element_visible(validation["selector"])
+            elif validation["validation_type"] == "value":
+                actual_value = await browser_driver.get_element_value(validation["selector"])
+                return actual_value == validation["expected_value"]
+            elif validation["validation_type"] == "state_change":
+                # Wait a moment for state to change
+                await asyncio.sleep(1)
+                return await browser_driver.is_element_visible(validation["selector"])
+            
+            return False
+        except Exception as e:
+            print(f"Validation error: {str(e)}")
+            return False
+
+    # Browser interaction functions
+    async def _click_element(self, browser_driver, action: BrowserAction) -> bool:
+        return await browser_driver.click_element(action.selector)
+        
+    async def _type_text(self, browser_driver, action: BrowserAction) -> bool:
+        return await browser_driver.input_text(action.selector, action.value)
+        
+    async def _select_option(self, browser_driver, action: BrowserAction) -> bool:
+        return await browser_driver.select_option(action.selector, action.value)
+        
+    async def _wait_for_element(self, browser_driver, action: BrowserAction) -> bool:
+        return await browser_driver.wait_for_element(action.selector)
+        
+    async def _scroll_to_element(self, browser_driver, action: BrowserAction) -> bool:
+        return await browser_driver.scroll_to_element(action.selector)
+
+class AutomationOrchestrator:
+    def __init__(self, anthropic_api_key: str):
+        self.planner = PlannerAgent(anthropic_api_key)
+        self.executor = ExecutorAgent(anthropic_api_key)
+        self.action_history: List[BrowserAction] = []
+        
+    async def get_browser_state(self, browser_driver) -> BrowserState:
+        """Capture current browser state"""
+        # Get basic page info
+        current_url = browser_driver.current_url()
+        page_title = browser_driver.get_title()
+        page_content = browser_driver.get_page_source()
+        
+        # Parse page content
+        soup = BeautifulSoup(page_content, 'html.parser')
+        
+        # Get interactive elements
+        interactive_elements = []
+        for elem in soup.find_all(['a', 'button', 'input[type="submit"]']):
+            interactive_elements.append({
+                "tag": elem.name,
+                "id": elem.get('id', ''),
+                "text": elem.get_text(strip=True),
+                "selector": self._generate_selector(elem)
+            })
+        
+        # Get form fields
+        form_fields = []
+        for elem in soup.find_all(['input', 'textarea', 'select']):
+            form_fields.append({
+                "type": elem.get('type', 'text'),
+                "id": elem.get('id', ''),
+                "name": elem.get('name', ''),
+                "placeholder": elem.get('placeholder', ''),
+                "selector": self._generate_selector(elem)
+            })
+        
+        # Get visible text
+        visible_text = " ".join(elem.get_text(strip=True) 
+                              for elem in soup.find_all(text=True) 
+                              if elem.parent.name not in ['style', 'script'])
+        
+        return BrowserState(
+            current_url=current_url,
+            page_title=page_title,
+            page_text=page_content,
+            interactive_elements=interactive_elements,
+            visible_text_content=visible_text,
+            form_fields=form_fields
+        )
+    
+    def _generate_selector(self, elem) -> str:
+        """Generate a reliable CSS selector for an element"""
+        if elem.get('id'):
+            return f"#{elem.get('id')}"
+        elif elem.get('name'):
+            return f"[name='{elem.get('name')}']"
+        elif elem.get('class'):
+            return f".{' .'.join(elem.get('class'))}"
+        else:
+            # Create a selector based on tag and text content
+            text = elem.get_text(strip=True)
+            if text:
+                return f"{elem.name}:contains('{text}')"
+            return elem.name
+    
+    async def execute_intent(self, browser_driver, intent: str, max_steps: int = 10) -> bool:
+        """Execute user intent through planning and execution loop"""
+        steps_taken = 0
+        self.action_history = []
+        
+        while steps_taken < max_steps:
+            # Get current state
+            current_state = await self.get_browser_state(browser_driver)
+            
+            # Get next action
+            try:
+                next_action = self.planner.get_next_action(
+                    current_state, 
+                    intent,
+                    self.action_history
+                )
+            except Exception as e:
+                print(f"Planning error: {str(e)}")
+                return False
+            
+            # Execute action
+            success = await self.executor.execute_action(next_action, browser_driver)
+            
+            if success:
+                self.action_history.append(next_action)
+                steps_taken += 1
+                
+                # Check if intent is satisfied
+                if await self._check_intent_satisfied(browser_driver, intent, current_state):
+                    return True
+            else:
+                print(f"Failed to execute action: {next_action}")
+                return False
+                
+        return False
+    
+    async def _check_intent_satisfied(self, browser_driver, intent: str, state: BrowserState) -> bool:
+        """Check if the user's intent has been satisfied"""
+        prompt = f"""Given the user's intent and current page state, determine if the intent has been satisfied.
+
+Intent: {intent}
+
+Current State:
+{self._format_state_for_prompt(state)}
+
+Previous Actions:
+{json.dumps([action.dict() for action in self.action_history], indent=2)}
+
+Respond with ONLY 'true' if the intent is satisfied, or 'false' if more actions are needed."""
+
+        response = self.client.messages.create(
+            model="claude-3-opus-20240229",
+            max_tokens=100,
+            temperature=0,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        return response.content[0].text.strip().lower() == 'true'
