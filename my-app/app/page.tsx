@@ -5,6 +5,7 @@ import BrowserView from './components/BrowserView';
 
 export default function Home() {
   const [debuggingUrl, setDebuggingUrl] = useState<string>();
+  const [sessionId, setSessionId] = useState<string>();
 
   const handleExecute = async () => {
     try {
@@ -12,6 +13,7 @@ export default function Home() {
         method: 'POST',
       });
       const data = await response.json();
+      setSessionId(data.sessionId);
       setDebuggingUrl(data.debuggingUrl);
     } catch (error) {
       console.error('Error executing browser session:', error);
@@ -25,10 +27,10 @@ export default function Home() {
           onClick={handleExecute}
           className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
         >
-          Start Browser Session
+          Start Browser Session 
         </button>
       </div>
-      <BrowserView debuggingUrl={debuggingUrl} />
+      <BrowserView sessionId={sessionId || ''} debuggingUrl={debuggingUrl} />
     </main>
   );
 }
