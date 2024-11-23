@@ -7,8 +7,19 @@ export async function POST(req: NextRequest) {
     const data = await req.json()  
     console.log('Form data received:', data)
 
-    
-    return NextResponse.json({ message: 'Form submitted successfully!' })
+    const response = await fetch('http://localhost:8000/execute', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+    const responseData = await response.json()
+    const { sessionId, debuggingUrl, status, title } = responseData
+
+    return NextResponse.json({ 
+      sessionId,
+      debuggingUrl,
+      status,
+      title
+     })
   } catch (error) {
     console.error(error)
     return NextResponse.json({ error: 'Something went wrong' }, { status: 500 })

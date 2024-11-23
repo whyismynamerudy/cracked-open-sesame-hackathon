@@ -1,5 +1,5 @@
 from app.core.config import Settings
-from app.sessions.router import cleanup_sessions
+from app.sessions.router import cleanup_sessions, create_session
 from app.sessions.router import router as sessions_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,27 +53,27 @@ async def execute():
     """
     Execute a browser automation task and return the session ID
     """
-    # You'll need to implement the logic to create/get a session
-    session_id = "your-session-id-logic-here"  # Replace with actual session creation
-    # Call the agents/execute endpoint
-    response = await app.url_for("/agents/execute")(
-        request=ExecuteRequest(
-            url=request.body.url,
-            intent=request.body.intent,
-            context=request.body.context
-        )
-    )
-    # Extract session ID and debugging URL from response
-    session_id = response["data"]["execution_results"]["session_id"]
-    debugging_url = response["data"]["execution_results"]["debugger_url"]
-    status = response["data"]["status"]
+    # Call the sessions/create endpoint
+    session_data = await create_session()
     
-    return {
-        "sessionId": session_id,
-        "debuggingUrl": debugging_url,
-        "status": status
-    }
+    # Navigate to the session
+    navigation_response = await navigate(
+        navigation=NavigationRequest(url=request.url, intent=request.intent),
+        session_id=session_data["session_id"]
+    )
+    
+    # Extract session ID and debugging URL from response
+    session_id = session_data["session_id"]
+    debugging_url = session_data["debugger_url"]
+    status = session_data["status"]
+    title = navigation_response["title"]
 
+    return {
+    "sessionId": session_id,
+    "debuggingUrl": debugging_url,
+    "status": status,
+    "title": title
+    }
 
 app = create_app()
 

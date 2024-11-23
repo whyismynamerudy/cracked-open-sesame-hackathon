@@ -401,6 +401,7 @@ async def create_session(background_tasks: BackgroundTasks):
     try:
         session_data = create_browser_session()
         session_id = session_data["session_id"]
+        debugger_url = session_data["debugger_url"]
         session_manager.add_session(session_id, session_data["driver"])
         
         return JSONResponse(
