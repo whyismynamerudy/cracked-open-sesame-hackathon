@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.agents.router import router as agents_router
 from app.sessions.router import router as sessions_router
 from app.core.config import Settings
 from app.sessions import cleanup_sessions
@@ -42,7 +41,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(sessions_router)
-app.include_router(agents_router)
 
 # Root endpoint for health check
 @app.get("/")
