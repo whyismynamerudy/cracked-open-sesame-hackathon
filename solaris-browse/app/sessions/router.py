@@ -8,6 +8,7 @@ from anthropic import Anthropic
 from fastapi.responses import JSONResponse
 import os
 import requests
+from app.agents.agents import AutomationOrchestrator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,6 +23,8 @@ router = APIRouter(
 BROWSERBASE_API_KEY = os.getenv("BROWSERBASE_API_KEY")
 BROWSERBASE_PROJECT_ID = os.getenv("BROWSERBASE_PROJECT_ID")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+
+orchestrator = AutomationOrchestrator(CLAUDE_API_KEY)
 
 # Initialize clients
 bb = Browserbase(api_key=BROWSERBASE_API_KEY)
@@ -97,11 +100,13 @@ class SessionListResponse(BaseModel):
 
 class NavigationRequest(BaseModel):
     url: str = Field(..., description="URL to navigate to", example="https://example.com")
+    intent: str = Field(default="TBA", description="User's automation intent")
 
 class NavigationResponse(BaseModel):
     url: str = Field(..., description="Current URL after navigation")
     title: str = Field(..., description="Page title")
-    analysis: str = Field(..., description="AI analysis of the page content")
+    automation_result: bool = Field(..., description="Whether the automation was successful")
+    actions_taken: List[Dict] = Field(..., description="List of actions taken during automation")
 
     class Config:
         json_schema_extra = {
@@ -111,6 +116,72 @@ class NavigationResponse(BaseModel):
                 "analysis": "This appears to be a simple webpage with a heading and brief description..."
             }
         }
+
+
+class SeleniumBrowserDriver():
+    def __init__(self, selenium_driver):
+        self.driver = selenium_driver
+    
+    async def current_url(self) -> str:
+        return self.driver.current_url
+    
+    async def get_title(self) -> str:
+        return self.driver.title
+    
+    async def get_page_source(self) -> str:
+        return self.driver.page_source
+    
+    async def click_element(self, selector: str) -> bool:
+        try:
+            element = self.driver.find_element("css selector", selector)
+            element.click()
+            return True
+        except Exception as e:
+            print(f"Click error: {str(e)}")
+            return False
+    
+    async def input_text(self, selector: str, value: str) -> bool:
+        try:
+            element = self.driver.find_element("css selector", selector)
+            element.clear()
+            element.send_keys(value)
+            return True
+        except Exception as e:
+            print(f"Input error: {str(e)}")
+            return False
+    
+    async def select_option(self, selector: str, value: str) -> bool:
+        try:
+            element = self.driver.find_element("css selector", selector)
+            element.click()
+            option = self.driver.find_element("css selector", f"{selector} option[value='{value}']")
+            option.click()
+            return True
+        except Exception as e:
+            print(f"Select error: {str(e)}")
+            return False
+    
+    async def wait_for_element(self, selector: str, timeout: int = 10) -> bool:
+        try:
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            from selenium.webdriver.common.by import By
+            
+            wait = WebDriverWait(self.driver, timeout)
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+            return True
+        except Exception as e:
+            print(f"Wait error: {str(e)}")
+            return False
+    
+    async def scroll_to_element(self, selector: str) -> bool:
+        try:
+            element = self.driver.find_element("css selector", selector)
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+            return True
+        except Exception as e:
+            print(f"Scroll error: {str(e)}")
+            return False
 
 class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
@@ -258,16 +329,30 @@ async def navigate(
         )
     
     try:
-        driver = active_sessions[session_id]
-        driver.get(navigation.url)
-        html_content = driver.page_source
-        analysis = analyze_page_with_claude(html_content)
+        # driver = active_sessions[session_id]
+        # driver.get(navigation.url)
+        # html_content = driver.page_source
+        # analysis = analyze_page_with_claude(html_content)
         # @RUDY add agents here
+
+        # Get Selenium driver and wrap it in our adapter
+        selenium_driver = active_sessions[session_id]
+        browser_driver = SeleniumBrowserDriver(selenium_driver)
+        
+        # Navigate to URL
+        selenium_driver.get(navigation.url)
+        
+        # Execute automation with the orchestrator
+        success = await orchestrator.execute_intent(
+            browser_driver,
+            navigation.intent
+        )
         
         return {
-            "url": driver.current_url,
-            "title": driver.title,
-            "analysis": analysis
+            "url": selenium_driver.current_url,
+            "title": selenium_driver.title,
+            "automation_result": success,
+            "actions_taken": [action.dict() for action in orchestrator.action_history]
         }
     except Exception as e:
         return JSONResponse(
