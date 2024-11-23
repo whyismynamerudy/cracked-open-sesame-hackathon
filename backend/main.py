@@ -1,7 +1,9 @@
+from contextlib import asynccontextmanager
+
+from app.core.config import Settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from app.core.config import Settings
+from pydantic import BaseModel
 
 settings = Settings()
 
@@ -33,3 +35,21 @@ app.add_middleware(
 @app.get("/")
 async def root():
     return {"status": "healthy", "version": "1.0.0"}
+
+# Define the request model
+class ExecuteRequest(BaseModel):
+    url: str
+    intent: str
+    context: str
+
+@app.post("/execute")
+async def execute(request: ExecuteRequest):
+    # TODO: Implement the execution logic
+    return {
+        "status": "success",
+        "data": {
+            "url": request.url,
+            "intent": request.intent,
+            "context": request.context
+        }
+    }
